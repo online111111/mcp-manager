@@ -58,6 +58,7 @@ type Coordinator struct {
 
 	desired         DesiredServer
 	currentGen      *Generation
+	publishedGen    *Generation // generation owning the currently published schema
 	state           string
 	consecutiveFail int
 	lastError       string
@@ -476,6 +477,7 @@ func (c *Coordinator) handleConnectingAndReady() {
 	genCtx, genCancel := context.WithCancel(c.ctx)
 	gen := newGeneration(genID, c.serverID, sess, procCloser, cfg.MaxConcurrency, cfg.CallTimeout, genCtx, genCancel, targetRev)
 	c.currentGen = gen
+	c.publishedGen = gen
 	c.cachedTools = tools
 	c.publishedCount = snap.PublishedCount(c.serverID)
 	c.state = StateReady

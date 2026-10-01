@@ -11,7 +11,7 @@ Configure the **current client machine** to use an already-running MCP Manager.
 
 Obtain both values from the user or the copied Admin-console prompt:
 
-- MCP endpoint, normally `https://<host>/mcp`
+- MCP endpoint, normally `https://<host>/mcp/progressive` (default); full fallback `https://<host>/mcp`
 - MCP access token
 
 Do not proceed with a placeholder token.
@@ -33,6 +33,10 @@ Do not proceed with a placeholder token.
 8. Validate the resulting configuration syntax before restarting/reloading the client.
 9. Verify that the client can connect, enumerate tools, and perform a harmless representative MCP operation when possible.
 10. Report the client configured, configuration path changed, transport selected, and verification result. Redact the token.
+
+## Progressive discovery (default)
+
+The `/mcp/progressive` endpoint publishes exactly three tools: `hub_search_tools`, `hub_describe_tool`, and `hub_call_tool`. Search returns bounded short matches (an empty query lists sources); describe returns the chosen full schema and catalog revision; call executes the target through the normal router. Verify this workflow with a harmless operation. The generic call entry is **not read-only**: show the target name/arguments and require the same approval that a direct deployment, deletion, or write would need. Do not permanently pre-approve the wrapper. If the user explicitly needs full native schemas or an installed client cannot use this workflow, keep the full fallback `/mcp`; CLI export supports `--discovery full`. Do not migrate unrelated clients without permission.
 
 ## Hard boundaries
 

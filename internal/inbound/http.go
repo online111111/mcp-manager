@@ -128,6 +128,8 @@ type HTTPServer struct {
 	publisher            *Publisher
 	manager              ManagerCallback
 	sdkHandler           *mcp.StreamableHTTPHandler
+	progressiveHandler   *mcp.StreamableHTTPHandler
+	progressiveServer    *mcp.Server
 	boundHost            string
 	boundPort            string
 	startTime            time.Time
@@ -299,12 +301,24 @@ func NewHTTPServer(listener net.Listener, publisher *Publisher, manager ManagerC
 		},
 	)
 
+	s.progressiveServer = newProgressiveServer(publisher, version)
+	s.progressiveHandler = mcp.NewStreamableHTTPHandler(
+		func(*http.Request) *mcp.Server { return s.progressiveServer },
+		&mcp.StreamableHTTPOptions{
+			SessionTimeout:             sessionTimeout,
+			MaxRequestBodyBytes:        maxBodySize,
+			DisableLocalhostProtection: true,
+		},
+	)
+
 	mux := http.NewServeMux()
 
 	// MCP streamable endpoint
 	mcpHandler := http.HandlerFunc(s.handleMCP)
 	mux.Handle("/mcp", mcpHandler)
 	mux.Handle("/mcp/", mcpHandler)
+	mux.Handle(ProgressivePath, mcpHandler)
+	mux.Handle(ProgressivePath+"/", mcpHandler)
 
 	// Read-only diagnostic endpoints
 	mux.HandleFunc("/healthz", s.handleHealthz)
@@ -461,6 +475,13 @@ func (s *HTTPServer) isAllowedHost(hostHeader string) bool {
 // and serializes capacity verification under initMu. Existing sessions and GET SSE
 // streams do not hold initMu.
 func (s *HTTPServer) handleMCP(w http.ResponseWriter, req *http.Request) {
+	handler := s.sdkHandler
+	if req.URL.Path == ProgressivePath || req.URL.Path == ProgressivePath+"/" {
+		handler = s.progressiveHandler
+	} else if req.URL.Path != "/mcp" && req.URL.Path != "/mcp/" {
+		http.NotFound(w, req)
+		return
+	}
 	// MCP 2026-07-28 is stateless over Streamable HTTP. This endpoint remains
 	// deliberately stateful so legacy clients keep session-scoped SSE/listChanged
 	// behavior. Reject the modern probe before the SDK allocates a temporary
@@ -492,18 +513,21 @@ func (s *HTTPServer) handleMCP(w http.ResponseWriter, req *http.Request) {
 		for range s.publisher.Server().Sessions() {
 			activeSessions++
 		}
+		for range s.progressiveServer.Sessions() {
+			activeSessions++
+		}
 		if activeSessions >= s.maxSessions {
 			http.Error(w, "server session capacity reached", http.StatusServiceUnavailable)
 			return
 		}
 
-		s.sdkHandler.ServeHTTP(w, req)
+		handler.ServeHTTP(w, req)
 		return
 	}
 
 	// Existing session POST, GET SSE stream, DELETE request:
 	// Serve directly without holding initMu.
-	s.sdkHandler.ServeHTTP(w, req)
+	handler.ServeHTTP(w, req)
 }
 
 // handleHealthz handles GET /healthz (200 OK, status=ok).

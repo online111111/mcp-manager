@@ -139,12 +139,24 @@ func (r *Router) RouteTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.
 		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "router: route lookup not configured"}
 	}
 
-	r.routes.RLock()
-	route, ok := r.routes.LookupRoute(publicName)
-	r.routes.RUnlock()
-	if !ok {
-		errorCategory = CategoryUnavailable
-		return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: fmt.Sprintf("unknown tool %q", publicName)}
+	var route catalog.RouteEntry
+	var validatedSnapshot *catalog.Snapshot
+	if options, validate := ctx.Value(validationKey{}).(validationOptions); validate {
+		var validationErr error
+		route, validatedSnapshot, validationErr = r.validateCall(ctx, req, options)
+		if validationErr != nil {
+			errorCategory = "invalid_params"
+			return nil, validationErr
+		}
+	} else {
+		r.routes.RLock()
+		var ok bool
+		route, ok = r.routes.LookupRoute(publicName)
+		r.routes.RUnlock()
+		if !ok {
+			errorCategory = CategoryUnavailable
+			return nil, &jsonrpc.Error{Code: jsonrpc.CodeInvalidParams, Message: fmt.Sprintf("unknown tool %q", publicName)}
+		}
 	}
 	serverID = route.ServerID
 
@@ -156,7 +168,19 @@ func (r *Router) RouteTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.
 		}, nil
 	}
 
-	lease, err := r.leases.AcquireLease(route.ServerID)
+	var lease Lease
+	var err error
+	if validatedSnapshot != nil {
+		if provider, ok := r.leases.(interface {
+			AcquireValidatedLease(string, *catalog.Snapshot) (Lease, error)
+		}); ok {
+			lease, err = provider.AcquireValidatedLease(route.ServerID, validatedSnapshot)
+		} else {
+			lease, err = r.leases.AcquireLease(route.ServerID)
+		}
+	} else {
+		lease, err = r.leases.AcquireLease(route.ServerID)
+	}
 	if err != nil {
 		if errors.Is(err, ErrServerBusy) {
 			errorCategory = CategoryBusy
@@ -172,6 +196,21 @@ func (r *Router) RouteTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.
 		}, nil
 	}
 	defer lease.Release()
+	if validatedSnapshot != nil {
+		// AcquireLease takes manager/coordinator locks. Never hold the publisher
+		// read lock across it: config apply takes those locks in the reverse order.
+		// Publication is revision-monotonic, so an optimistic recheck after the
+		// lease is acquired rejects old-schema/new-generation admission without
+		// blocking hot reload or holding a lock over downstream execution.
+		r.routes.RLock()
+		current := r.routes.(snapshotProvider).Snapshot()
+		unchanged := current != nil && current.Revision == validatedSnapshot.Revision
+		r.routes.RUnlock()
+		if !unchanged {
+			errorCategory = "invalid_params"
+			return nil, staleValidation()
+		}
+	}
 
 	generationCtx, generationCancel := context.WithCancel(ctx)
 	defer generationCancel()

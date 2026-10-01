@@ -75,7 +75,11 @@ test('search, filters and page-size controls have persistent accessible names', 
 test('client access combines tokens, manual config and local Agent setup', async t => {
   const page = await setup(t);
   assert.equal(await page.locator('#accessTokenSelect').isVisible(), true);
-  assert.match(await page.locator('#mcpEndpoint').textContent(), /\/mcp$/);
+  assert.match(await page.locator('#mcpEndpoint').textContent(), /\/mcp\/progressive$/);
+  const hint = await page.locator('.connection-card').filter({has: page.locator('#mcpEndpoint')}).locator('p').textContent();
+  assert.match(hint, /hub_search_tools.*hub_describe_tool.*hub_call_tool/);
+  assert.match(hint, /full/);
+  assert.match(hint, /审批/);
   assert.match(await page.locator('#httpAuthorization').textContent(), /^Authorization: Bearer /);
   assert.equal(await page.locator('a[href="/api/admin/v1/client-skill.zip"]').isVisible(), true);
   assert.equal(await page.locator('#copyClientPrompt').isVisible(), true);

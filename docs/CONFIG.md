@@ -122,6 +122,10 @@ mcp-manager serve --config config.json
 
 `validate` does not start downstream processes or network sessions.
 
+## Progressive client exposure
+
+No new configuration is required. `/mcp/progressive` exposes fixed search/describe/call entrypoints using the same filtered catalog and security policy; `/mcp` keeps the full interface. Both endpoints share the upstream session capacity. New CLI exports and Admin client prompts recommend progressive discovery; `--discovery full` selects the original interface. See [Progressive discovery](PROGRESSIVE-DISCOVERY.md) for validation limits and approval boundaries.
+
 ## Related
 
 - [Remote Admin](REMOTE-ADMIN.md)

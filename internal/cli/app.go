@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/online111111/mcp-manager/internal/buildinfo"
 	"github.com/online111111/mcp-manager/internal/inbound"
 	"github.com/online111111/mcp-manager/internal/manager"
+	"github.com/online111111/mcp-manager/internal/netpolicy"
 	hubruntime "github.com/online111111/mcp-manager/internal/runtime"
 )
 
@@ -82,7 +84,7 @@ Usage:
   mcp-manager serve --config <path>
   mcp-manager validate --config <path>
   mcp-manager import --from <path> --config <path> [--dry-run | --yes] [--remote-type <type>]
-  mcp-manager export [--client <cursor|claude-desktop>] [--transport <stdio|http>] [--endpoint <url>] [--token-env]
+  mcp-manager export [--client <cursor|claude-desktop>] [--transport <stdio|http>] [--discovery <progressive|full>] [--endpoint <url>] [--token-env]
   mcp-manager status [--endpoint <url>] [--token <bearer-token>] [--json]
   mcp-manager doctor [--endpoint <url>] [--token <bearer-token>]
   mcp-manager admin <list|get|add|edit|delete> ...
@@ -309,7 +311,8 @@ func runExport(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	client := fs.String("client", "cursor", "Target client: cursor or claude-desktop")
 	transport := fs.String("transport", "stdio", "Client transport: stdio or http")
-	endpoint := fs.String("endpoint", "http://127.0.0.1:8080/mcp", "MCP endpoint URL")
+	endpoint := fs.String("endpoint", "http://127.0.0.1:8080/mcp/progressive", "MCP endpoint URL")
+	discovery := fs.String("discovery", "progressive", "Tool discovery mode: progressive or full")
 	withTokenEnv := fs.Bool("token-env", false, "Add MCP_MANAGER_TOKEN environment placeholder for public MCP Manager stdio export")
 
 	if err := fs.Parse(args); err != nil {
@@ -332,6 +335,17 @@ func runExport(args []string, stdout, stderr io.Writer) int {
 		return ExitInvalidParams
 	}
 
+	discoveryLower := strings.ToLower(strings.TrimSpace(*discovery))
+	if discoveryLower != "progressive" && discoveryLower != "full" {
+		fmt.Fprintf(stderr, "error: unsupported discovery %q (supported: progressive, full)\n", *discovery)
+		return ExitInvalidParams
+	}
+	exportEndpoint, err := normalizeExportEndpoint(*endpoint, discoveryLower)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: invalid MCP endpoint: %v\n", err)
+		return ExitInvalidParams
+	}
+
 	exp := exportConfig{MCPServers: make(map[string]exportServerEntry)}
 
 	if transportLower == "stdio" {
@@ -341,13 +355,13 @@ func runExport(args []string, stdout, stderr io.Writer) int {
 		} else if abs, err := filepath.Abs(exePath); err == nil {
 			exePath = abs
 		}
-		entry := exportServerEntry{Command: exePath, Args: []string{"stdio", "--connect", *endpoint}}
+		entry := exportServerEntry{Command: exePath, Args: []string{"stdio", "--connect", exportEndpoint}}
 		if *withTokenEnv {
 			entry.Env = map[string]string{managerTokenEnv: "<YOUR_MCP_MANAGER_TOKEN>"}
 		}
 		exp.MCPServers["mcp-manager"] = entry
 	} else {
-		exp.MCPServers["mcp-manager"] = exportServerEntry{URL: *endpoint}
+		exp.MCPServers["mcp-manager"] = exportServerEntry{URL: exportEndpoint}
 	}
 
 	data, err := json.MarshalIndent(exp, "", "  ")
@@ -361,6 +375,36 @@ func runExport(args []string, stdout, stderr io.Writer) int {
 	return ExitSuccess
 }
 
+// normalizeExportEndpoint rewrites only the standard Manager paths. Custom
+// proxy paths (including encoded paths) remain under the client's control.
+func normalizeExportEndpoint(raw, discovery string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	u, err := netpolicy.ValidateHubEndpoint(raw)
+	if err != nil {
+		return "", errors.New("use an absolute HTTPS URL (HTTP only on loopback), without userinfo, query, or fragment")
+	}
+	switch strings.TrimSuffix(u.EscapedPath(), "/") {
+	case "", "/mcp", "/mcp/progressive":
+		u.Path = "/mcp"
+		if discovery == "progressive" {
+			u.Path += "/progressive"
+		}
+		u.RawPath = ""
+		return u.String(), nil
+	default:
+		return raw, nil
+	}
+}
+
+func diagnosticEndpoints(raw string) (baseURL, mcpURL string) {
+	baseURL = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if strings.HasSuffix(baseURL, "/mcp/progressive") {
+		return strings.TrimSuffix(baseURL, "/mcp/progressive"), baseURL
+	}
+	baseURL = strings.TrimSuffix(baseURL, "/mcp")
+	return baseURL, baseURL + "/mcp"
+}
+
 func runStatus(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -372,10 +416,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		return ExitInvalidParams
 	}
 
-	baseURL := strings.TrimRight(*endpoint, "/")
-	if strings.HasSuffix(baseURL, "/mcp") {
-		baseURL = strings.TrimSuffix(baseURL, "/mcp")
-	}
+	baseURL, _ := diagnosticEndpoints(*endpoint)
 	statusURL := baseURL + "/api/v1/status"
 
 	client := newHubHTTPClient(hubToken(*token), 5*time.Second)
@@ -449,11 +490,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		return ExitInvalidParams
 	}
 
-	baseURL := strings.TrimRight(*endpoint, "/")
-	if strings.HasSuffix(baseURL, "/mcp") {
-		baseURL = strings.TrimSuffix(baseURL, "/mcp")
-	}
-	mcpURL := baseURL + "/mcp"
+	baseURL, mcpURL := diagnosticEndpoints(*endpoint)
 	healthURL := baseURL + "/healthz"
 	readyURL := baseURL + "/readyz"
 
