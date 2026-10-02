@@ -550,7 +550,10 @@ func TestBridge_HubSessionFailure(t *testing.T) {
 		t.Fatalf("client connect failed: %v", err)
 	}
 
-	// Abruptly close the Hub HTTP server
+	// Force-close active SSE sockets; Close alone gracefully waits for them
+	// and can hide a missing disconnect behind the parent context deadline.
+	cutAt := time.Now()
+	ts.CloseClientConnections()
 	ts.Close()
 
 	// Wait for bridge to detect Hub session termination and exit
@@ -558,6 +561,12 @@ func TestBridge_HubSessionFailure(t *testing.T) {
 	case err := <-bridgeErrCh:
 		if err == nil {
 			t.Fatal("expected bridge to exit with error when Hub terminates, got nil")
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("parent context expired instead of prompt disconnect: %v", ctx.Err())
+		}
+		if elapsed := time.Since(cutAt); elapsed > 3*time.Second {
+			t.Fatalf("disconnect was not prompt: %s", elapsed)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("bridge did not exit within timeout after Hub terminated")

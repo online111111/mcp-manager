@@ -18,13 +18,13 @@ The product focuses on tool aggregation/routing. Resources, prompts, sampling, r
 HTTP-capable clients connect to:
 
 ```text
-https://mcp.example.com/mcp
+https://mcp.example.com/mcp/progressive
 ```
 
 stdio-only clients use:
 
 ```bash
-MCP_MANAGER_TOKEN='...' mcp-manager stdio --connect https://mcp.example.com/mcp
+MCP_MANAGER_TOKEN='...' mcp-manager stdio --connect https://mcp.example.com/mcp/progressive
 ```
 
 During the v0.4 compatibility window, `MCP_HUB_TOKEN` remains accepted by the CLI. New generated configurations use `MCP_MANAGER_TOKEN`.

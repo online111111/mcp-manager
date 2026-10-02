@@ -40,6 +40,8 @@ mcp-manager export --client cursor --transport http --endpoint https://mcp.examp
 
 Native HTTP clients use `https://mcp.example.com/mcp/progressive`. stdio clients use `mcp-manager stdio --connect https://mcp.example.com/mcp/progressive` with an MCP access token supplied via their secret/environment mechanism. The bridge discovers only the same fixed three definitions. A client supporting MCP calls can use this workflow without list-change notifications, but exact third-party product/version compatibility must still be tested.
 
+Existing client configurations are not changed automatically. To adopt progressive discovery, update the HTTP URL (or the stdio bridge `--connect` URL), retain the MCP access token, and reconnect/reload the MCP connection. No custom client plugin is required: the model invokes the three ordinary MCP tools in sequence. For agents that need guidance, add a rule to search first, describe the selected target, and call with the returned schema/revision instead of guessing arguments.
+
 The Admin console's client access card and connector Agent prompt recommend the progressive endpoint and explain the full fallback. `status`, `doctor`, and Remote Admin accept the progressive endpoint and resolve diagnostics to the Manager root; doctor tests the chosen MCP surface.
 
 ## Trade-offs

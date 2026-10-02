@@ -16,7 +16,7 @@ Do not reintroduce the old repository slug, old binary name, or old public produ
 
 ## What this project does
 
-MCP Manager is a self-hosted MCP gateway and management plane. It aggregates local stdio and remote Streamable HTTP MCP downstreams behind one managed `/mcp` endpoint, provides a browser Admin console and Remote Admin CLI, supports stdio-only clients through a bridge, and ships deployment assets for agents.
+MCP Manager is a self-hosted MCP gateway and management plane. It aggregates local stdio and remote Streamable HTTP MCP downstreams behind `/mcp/progressive` (fixed search/describe/call tools for new clients) and the compatible `/mcp` full-tool endpoint, provides a browser Admin console and Remote Admin CLI, supports stdio-only clients through a bridge, and ships deployment assets for agents.
 
 ## Read first
 

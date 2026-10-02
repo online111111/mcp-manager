@@ -7,7 +7,7 @@
 
 [English](README.md) | **简体中文**
 
-**MCP Manager** 是一个轻量、自托管的 **Model Context Protocol（MCP）网关、聚合器、代理与管理控制台**。本地 stdio 和远程 Streamable HTTP MCP 服务只配置一次，即可通过统一 `/mcp` 入口提供给 IDE、Coding Agent、AI 助手和仅支持 stdio 的客户端。
+**MCP Manager** 是一个轻量、自托管的 **Model Context Protocol（MCP）网关、聚合器、代理与管理控制台**。本地 stdio 和远程 Streamable HTTP MCP 服务只配置一次，即可通过统一的渐进发现入口提供给 IDE、Coding Agent、AI 助手和仅支持 stdio 的客户端；原 `/mcp` 全量工具入口继续保留兼容。
 
 **最新版本：** [下载 MCP Manager](https://github.com/online111111/mcp-manager/releases/latest) · Windows / Linux / macOS · amd64 / arm64
 
@@ -15,7 +15,7 @@
 
 ## 核心能力
 
-- 统一 `/mcp` 入口与动态工具目录。
+- `/mcp/progressive` 固定三工具入口，按搜索 → 读取定义 → 调用逐步发现能力；原 `/mcp` 全量工具目录保留回退。
 - 管理本地 stdio 子进程和远程 Streamable HTTP 下游。
 - 响应式 `/admin/` 管理台：运行状态、调用记录、服务增删改、客户端接入、Agent 部署资源。
 - Remote Admin CLI：无需 SSH 手改服务器配置即可 `list/get/add/edit/delete` 下游服务。
@@ -38,11 +38,13 @@ cp config.example.json config.json
 ./mcp-manager serve --config ./config.json
 ```
 
-默认 MCP 地址：
+新客户端推荐 MCP 地址：
 
 ```text
-http://127.0.0.1:8080/mcp
+http://127.0.0.1:8080/mcp/progressive
 ```
+
+原 `http://127.0.0.1:8080/mcp` 仍提供全量原生工具目录。渐进发现已包含在当前源码构建中；旧版 Release 二进制可能仅提供 `/mcp`。
 
 诊断：
 
@@ -108,20 +110,27 @@ v0.4 兼容期内，CLI 仍接受历史变量 `MCP_HUB_TOKEN` 和 `MCP_HUB_ADMIN
 原生支持 Streamable HTTP 的客户端连接：
 
 ```text
-https://mcp.example.com/mcp
+https://mcp.example.com/mcp/progressive
 ```
 
 仅支持 stdio 的客户端：
 
 ```bash
-MCP_MANAGER_TOKEN='...' mcp-manager stdio --connect https://mcp.example.com/mcp
+MCP_MANAGER_TOKEN='...' mcp-manager stdio --connect https://mcp.example.com/mcp/progressive
 ```
 
 支持的客户端优先用 CLI 导出配置：
 
 ```bash
-mcp-manager export --client cursor --transport stdio --endpoint https://mcp.example.com/mcp --token-env
+mcp-manager export --client cursor --transport stdio --endpoint https://mcp.example.com --token-env
+
+# 显式回退全量原生工具目录
+mcp-manager export --client cursor --transport http --endpoint https://mcp.example.com --discovery full
 ```
+
+已有客户端不会自动迁移：修改连接 URL 后重新连接即可采用渐进发现，MCP Token 不变。不需要专用插件，也不需要把搜索到的目标工具重新注册进客户端列表。Agent 依次使用 `hub_search_tools` 搜索、`hub_describe_tool` 读取参数定义，再通过 `hub_call_tool` 调用目标。具体第三方客户端和模型是否适配仍需实测。
+
+不要把 `hub_call_tool` 永久设成免审批：应检查真实目标名和参数，并保留与直接执行敏感操作相同的审批。完整 Schema、revision 检查、限制与取舍见[渐进发现文档](docs/PROGRESSIVE-DISCOVERY.md)。
 
 ## 远程管理下游服务
 
