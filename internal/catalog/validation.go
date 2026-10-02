@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -103,7 +104,9 @@ func CloneAndAssignPublicName(tool *mcp.Tool, publicName string) (*mcp.Tool, int
 	}
 
 	var cloned mcp.Tool
-	if err := json.Unmarshal(data, &cloned); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&cloned); err != nil {
 		return nil, size, fmt.Errorf("tool unmarshaling error: %w", err)
 	}
 	cloned.Name = publicName

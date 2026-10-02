@@ -7,7 +7,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-**MCP Manager** is a lightweight, self-hosted **Model Context Protocol (MCP) gateway, aggregator, proxy, and management console**. Configure local stdio and remote Streamable HTTP MCP servers once, then expose one managed `/mcp` endpoint to IDEs, coding agents, AI assistants, and stdio-only clients.
+**MCP Manager** is a lightweight, self-hosted **Model Context Protocol (MCP) gateway, aggregator, proxy, and management console**. Configure local stdio and remote Streamable HTTP MCP servers once, then expose a managed progressive-discovery endpoint to IDEs, coding agents, AI assistants, and stdio-only clients. The original `/mcp` full-tool endpoint remains available for compatibility.
 
 **Latest release:** [Download MCP Manager](https://github.com/online111111/mcp-manager/releases/latest) · Windows / Linux / macOS · amd64 / arm64
 
@@ -15,7 +15,7 @@
 
 ## What it provides
 
-- One `/mcp` endpoint with a dynamically updated tool catalog.
+- `/mcp/progressive` with a fixed three-tool search → describe → call workflow, plus the original `/mcp` full-tool catalog for compatible fallback.
 - Managed stdio children and remote Streamable HTTP downstreams.
 - Responsive `/admin/` console for status, calls, downstream CRUD, client access, and Agent deployment assets.
 - Remote Admin CLI: `list`, `get`, `add`, `edit`, and `delete` downstream services without SSH-editing the server config.
@@ -38,11 +38,13 @@ cp config.example.json config.json
 ./mcp-manager serve --config ./config.json
 ```
 
-Default MCP endpoint:
+Recommended MCP endpoint for new clients:
 
 ```text
-http://127.0.0.1:8080/mcp
+http://127.0.0.1:8080/mcp/progressive
 ```
+
+The original `http://127.0.0.1:8080/mcp` endpoint remains available for full native-tool discovery. Progressive discovery is available in current source builds; older release binaries may expose only `/mcp`.
 
 Diagnostics:
 
@@ -108,20 +110,27 @@ For the v0.4 compatibility window, the CLI also accepts the historical `MCP_HUB_
 For native Streamable HTTP clients, connect to:
 
 ```text
-https://mcp.example.com/mcp
+https://mcp.example.com/mcp/progressive
 ```
 
 For stdio-only clients:
 
 ```bash
-MCP_MANAGER_TOKEN='...' mcp-manager stdio --connect https://mcp.example.com/mcp
+MCP_MANAGER_TOKEN='...' mcp-manager stdio --connect https://mcp.example.com/mcp/progressive
 ```
 
 Generate supported client configuration with:
 
 ```bash
-mcp-manager export --client cursor --transport stdio --endpoint https://mcp.example.com/mcp --token-env
+mcp-manager export --client cursor --transport stdio --endpoint https://mcp.example.com --token-env
+
+# Explicit full native-tool fallback
+mcp-manager export --client cursor --transport http --endpoint https://mcp.example.com --discovery full
 ```
+
+Existing clients are not migrated automatically: change the connection URL and reconnect to adopt progressive discovery; keep the same MCP access token. No custom client plugin or dynamic tool registration is required. The agent uses `hub_search_tools`, then `hub_describe_tool`, then `hub_call_tool` to invoke the selected target. Exact third-party client/model compatibility still needs verification.
+
+Do not permanently pre-approve `hub_call_tool`: inspect the target name and arguments and apply the same approvals as a direct sensitive operation. See [Progressive discovery](docs/PROGRESSIVE-DISCOVERY.md) for schemas, revision checks, limits and trade-offs.
 
 ## Remote Admin
 

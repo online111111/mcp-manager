@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/online111111/mcp-manager/internal/buildinfo"
 	"github.com/online111111/mcp-manager/internal/catalog"
@@ -126,6 +127,13 @@ func dialTransport(
 	}
 
 	client := mcp.NewClient(clientInfo, clientOpts)
+	precise := &preciseToolTransport{base: transport, pending: make(map[jsonrpc.ID]*preciseListCapture)}
+	client.AddSendingMiddleware(precise.middleware)
+	if httpTransport, ok := transport.(*mcp.StreamableClientTransport); ok {
+		preciseHTTPTransport(httpTransport, precise)
+	} else {
+		transport = precise
+	}
 
 	connectCtx := ctx
 	if startupTimeout > 0 {

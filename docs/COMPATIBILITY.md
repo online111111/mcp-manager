@@ -18,18 +18,18 @@ The product focuses on tool aggregation/routing. Resources, prompts, sampling, r
 HTTP-capable clients connect to:
 
 ```text
-https://mcp.example.com/mcp
+https://mcp.example.com/mcp/progressive
 ```
 
 stdio-only clients use:
 
 ```bash
-MCP_MANAGER_TOKEN='...' mcp-manager stdio --connect https://mcp.example.com/mcp
+MCP_MANAGER_TOKEN='...' mcp-manager stdio --connect https://mcp.example.com/mcp/progressive
 ```
 
 During the v0.4 compatibility window, `MCP_HUB_TOKEN` remains accepted by the CLI. New generated configurations use `MCP_MANAGER_TOKEN`.
 
-Use `mcp-manager export` for supported client formats rather than copying stale examples.
+Use `mcp-manager export` for supported client formats rather than copying stale examples. New exports and the Admin connector prompt default to `/mcp/progressive`, which publishes exactly `hub_search_tools`, `hub_describe_tool`, and `hub_call_tool`; selected full definitions are returned on demand. Existing `/mcp` clients retain the full native-tool interface. Use `--discovery full` for explicit fallback. The generic call is not read-only and must retain target-specific approval. HTTP and the native stdio bridge are covered by integration tests; that does not certify untested third-party clients. See [Progressive discovery](PROGRESSIVE-DISCOVERY.md).
 
 ## Downstream behavior
 

@@ -355,9 +355,11 @@ function renderTokens() {
 }
 
 function renderClientAccess() {
-  const endpoint = `${location.origin}/mcp`;
+  const endpoint = `${location.origin}/mcp/progressive`;
   const token = selectedToken()?.token || "";
   $("#mcpEndpoint").textContent = endpoint;
+  const endpointHelp = $("#mcpEndpoint").closest(".connection-card")?.querySelector("p");
+  if (endpointHelp) endpointHelp.textContent = `推荐渐进接入，固定 3 个工具：hub_search_tools → hub_describe_tool → hub_call_tool。call 不是只读，不能跳过目标操作所需的审批。需要完整目录时显式回退 full：${location.origin}/mcp（认证相同）。`;
   $("#accessTokenValue").value = token;
   $("#accessTokenValue").placeholder = token ? "" : "还没有可用 MCP Token";
   $("#copyAccessToken").disabled = !token;
@@ -752,14 +754,16 @@ $("#copyClientPrompt").addEventListener("click", async () => {
   const epoch = state.authEpoch;
   const token = selectedToken()?.token;
   if (!token) return toast("请先选择一个 MCP Token", "error");
-  const endpoint = `${location.origin}/mcp`;
+  const endpoint = `${location.origin}/mcp/progressive`;
+  const fullEndpoint = `${location.origin}/mcp`;
   try {
     const response = await fetch("/api/admin/v1/client-prompt", { credentials: "same-origin", signal: AbortSignal.timeout(15000) });
     if (response.status === 401) { showLogin(); throw new Error("登录已失效，请重新登录"); }
     if (!response.ok) throw new Error("客户端 Agent Prompt 暂时不可用");
     const template = await response.text();
     if (epoch !== state.authEpoch) return;
-    const prompt = template.split("{{MCP_ENDPOINT}}").join(endpoint).split("{{MCP_TOKEN}}").join(token);
+    const prompt = template.split("{{MCP_ENDPOINT}}").join(endpoint)
+      .split("{{MCP_FULL_ENDPOINT}}").join(fullEndpoint).split("{{MCP_TOKEN}}").join(token);
     await navigator.clipboard.writeText(prompt);
     toast("客户端 Agent Prompt 已复制");
   } catch (error) { toast(error.message || "浏览器未允许复制，请手动配置客户端", "error"); }

@@ -7,7 +7,7 @@ Use this reference only after identifying the installed client and its current v
 1. Native remote MCP / Streamable HTTP, when the installed client documents support for it.
 2. Local stdio bridge through the `mcp-manager` binary when remote MCP is unavailable.
 
-The remote endpoint normally ends in `/mcp` and authenticates with an MCP access token. The Admin Token is unrelated and must never be placed into client MCP configuration.
+The default remote endpoint ends in `/mcp/progressive` and authenticates with an MCP access token. It publishes exactly three tools: `hub_search_tools` → `hub_describe_tool` → `hub_call_tool`. Only requested definitions are returned in tool results; the MCP tool list stays fixed. An empty search lists sources; passing a server name supports bounded browsing. Retain the describe result's revision for stale-schema protection. `hub_call_tool` is not read-only and may change external state: preserve target-specific approval, and never permanently pre-approve the generic wrapper. The unchanged `/mcp` endpoint remains the full native-schema fallback; export with `--discovery full` when explicitly requested. The Admin Token is unrelated and must never be placed into client MCP configuration.
 
 ## Safe configuration editing
 

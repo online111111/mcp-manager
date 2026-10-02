@@ -369,18 +369,12 @@ func normalizeAdminEndpoint(raw string) (string, error) {
 	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return "", errors.New("userinfo, query, and fragment are not allowed")
 	}
-	if strings.HasSuffix(u.Path, "/mcp") {
-		u.Path = strings.TrimSuffix(u.Path, "/mcp")
-	}
-	if strings.HasSuffix(u.Path, "/admin/") {
-		u.Path = strings.TrimSuffix(u.Path, "/admin/")
-	} else if strings.HasSuffix(u.Path, "/admin") {
-		u.Path = strings.TrimSuffix(u.Path, "/admin")
-	}
-	if u.Path != "" && u.Path != "/" {
-		return "", errors.New("endpoint path must be empty, /admin, or /mcp")
+	path := strings.TrimSuffix(u.EscapedPath(), "/")
+	if path != "" && path != "/admin" && path != "/mcp" && path != "/mcp/progressive" {
+		return "", errors.New("endpoint path must be empty, /admin, /mcp, or /mcp/progressive")
 	}
 	u.Path = ""
+	u.RawPath = ""
 	validated, err := netpolicy.ValidateHubEndpoint(u.String())
 	if err != nil {
 		return "", err
