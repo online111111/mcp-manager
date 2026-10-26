@@ -28,15 +28,20 @@ const (
 	TransportTypeIO             TransportType = "io"
 )
 
+// DefaultHTTPKeepAlive refreshes stateful remote sessions without keeping stdio workers busy.
+const DefaultHTTPKeepAlive = 5 * time.Minute
+
 type HTTPOptions struct {
 	Endpoint             string
 	Headers              map[string]string
 	BaseRoundTripper     http.RoundTripper
 	DisableStandaloneSSE bool
 	MaxRetries           int
-	StartupTimeout       time.Duration
-	ClientInfo           *mcp.Implementation
-	OnToolListChanged    func()
+	// KeepAlive is the HTTP protocol ping interval. Zero uses the default; negative disables it.
+	KeepAlive         time.Duration
+	StartupTimeout    time.Duration
+	ClientInfo        *mcp.Implementation
+	OnToolListChanged func()
 }
 
 func (o *HTTPOptions) Validate() error {
@@ -78,6 +83,8 @@ type Options struct {
 	BaseRoundTripper     http.RoundTripper
 	DisableStandaloneSSE bool
 	MaxRetries           int
+	// KeepAlive is the HTTP protocol ping interval. Zero uses the default; negative disables it.
+	KeepAlive time.Duration
 
 	Reader io.ReadCloser
 	Writer io.WriteCloser

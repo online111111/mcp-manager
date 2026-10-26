@@ -16,7 +16,6 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/online111111/mcp-manager/internal/buildinfo"
-	"github.com/online111111/mcp-manager/internal/downstream"
 	"github.com/online111111/mcp-manager/internal/wirelimit"
 )
 
@@ -61,6 +60,14 @@ type Options struct {
 	// StartupTimeout specifies the timeout for initial Hub connection and tool discovery.
 	StartupTimeout time.Duration
 
+	// KeepAlive overrides the downstream HTTP ping interval. Zero inherits the
+	// downstream default (five minutes); negative disables pings.
+	KeepAlive time.Duration
+
+	// ReconnectAttempts and ReconnectDelay bound recovery; zero selects defaults.
+	ReconnectAttempts int
+	ReconnectDelay    time.Duration
+
 	// ClientInfo describes the bridge client connecting to Hub.
 	ClientInfo *mcp.Implementation
 
@@ -79,17 +86,24 @@ func (o *Options) Validate() error {
 		return fmt.Errorf("%w: %q (must be a valid http:// or https:// URL with host)", ErrInvalidEndpoint, o.Endpoint)
 	}
 
+	if o.ReconnectAttempts < 0 || o.ReconnectAttempts > 10 || o.ReconnectDelay < 0 || o.ReconnectDelay > 5*time.Second {
+		return errors.New("invalid bridge recovery policy")
+	}
 	return nil
 }
 
 // Bridge connects a local stdio MCP client to a running remote/local Hub over Streamable HTTP.
 // It exposes all Hub public tools dynamically to the local client, forwards CallTool requests
-// with raw arguments, updates tools on Hub ToolListChanged notifications, and exits on Hub session failure.
+// with raw arguments and replaces lost Hub sessions without replaying tool calls.
 type Bridge struct {
 	opts Options
 
-	hubSession *downstream.Session
-	server     *mcp.Server
+	server *mcp.Server
+
+	sessionMu    sync.Mutex
+	current      *hubGeneration
+	stateChanged chan struct{}
+	recoverCh    chan hubFailure
 
 	toolsMu      sync.RWMutex
 	currentTools map[string]*mcp.Tool
@@ -136,6 +150,13 @@ func New(opts Options) (*Bridge, error) {
 		opts.StartupTimeout = DefaultStartupTimeout
 	}
 
+	if opts.ReconnectAttempts == 0 {
+		opts.ReconnectAttempts = 5
+	}
+	if opts.ReconnectDelay == 0 {
+		opts.ReconnectDelay = 500 * time.Millisecond
+	}
+
 	if opts.ClientInfo == nil {
 		opts.ClientInfo = &mcp.Implementation{
 			Name:    "mcp-manager-bridge",
@@ -158,6 +179,8 @@ func New(opts Options) (*Bridge, error) {
 		opts:         opts,
 		currentTools: make(map[string]*mcp.Tool),
 		logger:       logger,
+		stateChanged: make(chan struct{}),
+		recoverCh:    make(chan hubFailure, 1),
 	}
 
 	return b, nil
@@ -190,39 +213,13 @@ func RunWithOptions(ctx context.Context, opts Options) error {
 	defer cancel(nil)
 	b.cancel = cancel
 
-	// 1. Connect to Hub via Streamable HTTP ClientSession using downstream.DialHTTP.
-	// Note: downstream.DialHTTP explicitly sets ClientOptions.Capabilities = &mcp.ClientCapabilities{},
-	// ensuring client roots capabilities are disabled per MCP-Hub contract.
-	connectCtx := runCtx
-	if b.opts.StartupTimeout > 0 {
-		var connCancel context.CancelFunc
-		connectCtx, connCancel = context.WithTimeout(runCtx, b.opts.StartupTimeout)
-		defer connCancel()
-	}
-
-	hubSession, err := downstream.DialHTTP(runCtx, downstream.HTTPOptions{
-		Endpoint:         b.opts.Endpoint,
-		Headers:          b.opts.Headers,
-		BaseRoundTripper: b.opts.BaseRoundTripper,
-		// A bridge must terminate promptly when its Hub disappears. Disable
-		// transport-level reconnect retries; the local stdio client can relaunch
-		// the bridge, while a stale reconnect would keep the Hub test/server
-		// process alive after shutdown.
-		MaxRetries:     -1,
-		StartupTimeout: b.opts.StartupTimeout,
-		ClientInfo:     b.opts.ClientInfo,
-	})
+	initial, initialTools, err := b.connectHub(runCtx)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Hub at %s: %w", b.opts.Endpoint, err)
 	}
-	defer hubSession.Close()
-	b.hubSession = hubSession
-
-	// 2. Fetch all initial public tools from Hub before accepting local client requests.
-	initialTools, err := hubSession.ListAllTools(connectCtx)
-	if err != nil {
-		return fmt.Errorf("failed to fetch initial tools from Hub: %w", err)
-	}
+	defer b.closeHub()
+	b.current = initial
+	initial.ready = true
 
 	// 3. Create local SDK Server.
 	// Explicitly configure DiscardHandler for SDK Server so it NEVER writes log messages to stdout.
@@ -240,6 +237,11 @@ func RunWithOptions(ctx context.Context, opts Options) error {
 	// the complete remove/add batch so it cannot observe an intermediate table.
 	b.server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(methodCtx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if method == "tools/list" || method == "tools/call" {
+				if _, err := b.awaitHub(methodCtx); err != nil {
+					return nil, err
+				}
+			}
 			if method == "tools/list" {
 				// A notification normally completes the refresh before the
 				// client's follow-up list request. If it is still pending, make
@@ -270,12 +272,12 @@ func RunWithOptions(ctx context.Context, opts Options) error {
 	b.localToolCaps.ListChanged = true
 	b.syncedSeq.Store(b.changeSeq.Load())
 
-	// 5. Watch for Hub ToolListChanged notifications in background.
-	go b.watchToolListChanges(runCtx)
-
-	// 6. Monitor Hub session failure in background.
-	// If Hub closes or fails unexpectedly, cancel runCtx to terminate local server promptly.
-	go b.monitorHubSession(runCtx)
+	coordinatorDone := make(chan struct{})
+	go func() {
+		defer close(coordinatorDone)
+		b.recoverHub(runCtx)
+	}()
+	b.watchHub(runCtx, initial)
 
 	// 7. Expose tools over Stdio / IO transport.
 	transport := &mcp.IOTransport{
@@ -290,7 +292,8 @@ func RunWithOptions(ctx context.Context, opts Options) error {
 	// cancels its standalone SSE reader, so the test/program can close its
 	// HTTP server without waiting on a persistent GET connection.
 	cancel(nil)
-	_ = hubSession.Close()
+	b.closeHub()
+	<-coordinatorDone
 
 	// Determine exit condition:
 	// Prioritize Hub session failure error if one occurred.
@@ -315,32 +318,9 @@ func RunWithOptions(ctx context.Context, opts Options) error {
 	return serverErr
 }
 
-// monitorHubSession waits for the Hub session connection to end.
-// If the Hub disconnects unexpectedly while bridge is running, it records the failure and cancels runCtx.
-func (b *Bridge) monitorHubSession(ctx context.Context) {
-	if b.hubSession == nil {
-		return
-	}
-
-	waitErr := b.hubSession.RawSession().Wait()
-
-	b.hubErrMu.Lock()
-	defer b.hubErrMu.Unlock()
-
-	if !b.closed.Load() && ctx.Err() == nil {
-		b.hubFailureErr = waitErr
-		if b.hubFailureErr == nil {
-			b.hubFailureErr = ErrHubSessionClosed
-		}
-		if b.cancel != nil {
-			b.cancel(b.hubFailureErr)
-		}
-	}
-}
-
 // watchToolListChanges processes Hub tools/list_changed notifications without blocking SDK callbacks.
-func (b *Bridge) watchToolListChanges(ctx context.Context) {
-	changeCh := b.hubSession.ToolListChangedChan()
+func (b *Bridge) watchToolListChanges(ctx context.Context, generation *hubGeneration) {
+	changeCh := generation.session.ToolListChangedChan()
 
 	for {
 		select {
@@ -350,8 +330,14 @@ func (b *Bridge) watchToolListChanges(ctx context.Context) {
 			if !ok {
 				return
 			}
+			b.sessionMu.Lock()
+			if b.current != generation || !generation.ready {
+				b.sessionMu.Unlock()
+				return
+			}
 			b.changeSeq.Add(1)
 			b.syncNeeded.Store(true)
+			b.sessionMu.Unlock()
 			// Drain the current notification burst, then wait a bounded
 			// interval for the Hub's publisher debounce to finish.
 			for {
@@ -360,8 +346,7 @@ func (b *Bridge) watchToolListChanges(ctx context.Context) {
 					if !ok {
 						return
 					}
-					b.changeSeq.Add(1)
-					b.syncNeeded.Store(true)
+
 				default:
 					goto burstDrained
 				}
@@ -372,7 +357,7 @@ func (b *Bridge) watchToolListChanges(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			}
-			if err := b.syncTools(ctx); err != nil {
+			if err := b.syncGeneration(ctx, generation); err != nil {
 				if ctx.Err() == nil && !b.closed.Load() {
 					b.logger.Warn("failed to synchronize tool list from Hub", "error", err)
 				}
@@ -383,6 +368,14 @@ func (b *Bridge) watchToolListChanges(ctx context.Context) {
 
 // syncTools re-lists all tools from Hub and dynamically updates local Server AddTool/RemoveTools.
 func (b *Bridge) syncTools(ctx context.Context) error {
+	generation, err := b.awaitHub(ctx)
+	if err != nil {
+		return err
+	}
+	return b.syncGeneration(ctx, generation)
+}
+
+func (b *Bridge) syncGeneration(ctx context.Context, generation *hubGeneration) error {
 	b.syncMu.Lock()
 	defer b.syncMu.Unlock()
 
@@ -390,11 +383,19 @@ func (b *Bridge) syncTools(ctx context.Context) error {
 		return ctx.Err()
 	}
 
-	tools, err := b.hubSession.ListAllTools(ctx)
+	tools, err := generation.session.ListAllTools(ctx)
 	if err != nil {
+		if ctx.Err() == nil {
+			b.requestRecovery(generation, err)
+		}
 		return err
 	}
 
+	b.sessionMu.Lock()
+	defer b.sessionMu.Unlock()
+	if b.current != generation || !generation.ready || ctx.Err() != nil {
+		return ErrHubSessionClosed
+	}
 	b.updateRegisteredTools(tools)
 	b.syncedSeq.Store(b.changeSeq.Load())
 	b.syncNeeded.Store(false)
@@ -458,23 +459,21 @@ func (b *Bridge) dispatchTool(ctx context.Context, req *mcp.CallToolRequest) (*m
 		return nil, ErrBridgeClosed
 	}
 
-	b.hubErrMu.Lock()
-	failure := b.hubFailureErr
-	b.hubErrMu.Unlock()
-	if failure != nil {
-		return nil, ErrHubSessionClosed
-	}
-
-	if b.hubSession == nil || b.hubSession.IsClosed() {
-		return nil, ErrHubSessionClosed
+	generation, err := b.awaitHub(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	// Forward tool call with raw arguments to the Hub public tool name
-	return b.hubSession.CallToolWithParams(ctx, &mcp.CallToolParams{
+	result, err := generation.session.CallToolWithParams(ctx, &mcp.CallToolParams{
 		Meta:      req.Params.Meta,
 		Name:      req.Params.Name,
 		Arguments: req.Params.Arguments,
 	})
+	if err != nil && ctx.Err() == nil {
+		b.requestRecovery(generation, err)
+	}
+	return result, err
 }
 
 // nopWriteCloser wraps an io.Writer with a no-op Close method.

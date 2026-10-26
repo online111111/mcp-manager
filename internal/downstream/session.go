@@ -51,7 +51,7 @@ func DialHTTP(ctx context.Context, opts HTTPOptions) (*Session, error) {
 		MaxRetries:           opts.MaxRetries,
 	}
 
-	return dialTransport(ctx, transport, opts.StartupTimeout, opts.ClientInfo, opts.OnToolListChanged)
+	return dialTransport(ctx, transport, opts.StartupTimeout, opts.ClientInfo, opts.OnToolListChanged, opts.KeepAlive)
 }
 
 // DialIO connects to a downstream MCP server over an IO transport (stdin/stdout pipes).
@@ -65,7 +65,7 @@ func DialIO(ctx context.Context, opts IOOptions) (*Session, error) {
 		Writer: opts.Writer,
 	}}
 
-	return dialTransport(ctx, transport, opts.StartupTimeout, opts.ClientInfo, opts.OnToolListChanged)
+	return dialTransport(ctx, transport, opts.StartupTimeout, opts.ClientInfo, opts.OnToolListChanged, -1)
 }
 
 // Dial connects to a downstream MCP server using the transport specified in Options.
@@ -78,6 +78,7 @@ func Dial(ctx context.Context, opts Options) (*Session, error) {
 			BaseRoundTripper:     opts.BaseRoundTripper,
 			DisableStandaloneSSE: opts.DisableStandaloneSSE,
 			MaxRetries:           opts.MaxRetries,
+			KeepAlive:            opts.KeepAlive,
 			StartupTimeout:       opts.StartupTimeout,
 			ClientInfo:           opts.ClientInfo,
 			OnToolListChanged:    opts.OnToolListChanged,
@@ -103,6 +104,7 @@ func dialTransport(
 	startupTimeout time.Duration,
 	clientInfo *mcp.Implementation,
 	onToolListChanged func(),
+	keepAlive time.Duration,
 ) (*Session, error) {
 	if clientInfo == nil {
 		clientInfo = &mcp.Implementation{
@@ -124,6 +126,16 @@ func dialTransport(
 		ToolListChangedHandler: func(reqCtx context.Context, req *mcp.ToolListChangedRequest) {
 			s.handleToolListChanged()
 		},
+	}
+
+	if _, httpTransport := transport.(*mcp.StreamableClientTransport); httpTransport {
+		if keepAlive == 0 {
+			keepAlive = DefaultHTTPKeepAlive
+		}
+		if keepAlive > 0 {
+			clientOpts.KeepAlive = keepAlive
+			clientOpts.KeepAliveFailureThreshold = 3
+		}
 	}
 
 	client := mcp.NewClient(clientInfo, clientOpts)
