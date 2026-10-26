@@ -513,8 +513,8 @@ func TestBridge_StdoutPurity(t *testing.T) {
 	}
 }
 
-// TestBridge_HubSessionFailure verifies that if the Hub terminates or closes abruptly,
-// the bridge detects the failure and exits promptly with an error.
+// TestBridge_HubSessionFailure verifies that a permanently unavailable Hub exhausts
+// a short explicit recovery policy and exits without hanging the local client.
 func TestBridge_HubSessionFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -538,9 +538,11 @@ func TestBridge_HubSessionFailure(t *testing.T) {
 	bridgeErrCh := make(chan error, 1)
 	go func() {
 		bridgeErrCh <- RunWithOptions(ctx, Options{
-			Endpoint: ts.URL,
-			Stdin:    serverIn,
-			Stdout:   serverOut,
+			Endpoint:          ts.URL,
+			Stdin:             serverIn,
+			Stdout:            serverOut,
+			ReconnectAttempts: 2,
+			ReconnectDelay:    10 * time.Millisecond,
 		})
 	}()
 

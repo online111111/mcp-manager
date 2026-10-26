@@ -2,7 +2,7 @@
 
 ## Current baseline
 
-The production module and independent SDK probe use `github.com/modelcontextprotocol/go-sdk v1.7.0`. Go 1.25 remains the declared compatibility floor; CI exercises Go 1.25.8 and Go 1.27.1 on Linux, Windows, and macOS.
+The production module and independent SDK probe use `github.com/modelcontextprotocol/go-sdk v1.7.0`. Go 1.25 remains the declared compatibility floor; CI exercises Go 1.25.8 and Go 1.27.3 on Linux, Windows, and macOS.
 
 MCP Manager keeps a stateful/session-oriented compatibility model centered on the 2025-11-25 generation of Streamable HTTP behavior while using SDK v1.7.0. Discovery contains compatibility handling for older peers. The project does **not** claim complete native support for every MCP 2026-07-28 capability exposed by the SDK.
 
@@ -30,6 +30,39 @@ MCP_MANAGER_TOKEN='...' mcp-manager stdio --connect https://mcp.example.com/mcp/
 During the v0.4 compatibility window, `MCP_HUB_TOKEN` remains accepted by the CLI. New generated configurations use `MCP_MANAGER_TOKEN`.
 
 Use `mcp-manager export` for supported client formats rather than copying stale examples. New exports and the Admin connector prompt default to `/mcp/progressive`, which publishes exactly `hub_search_tools`, `hub_describe_tool`, and `hub_call_tool`; selected full definitions are returned on demand. Existing `/mcp` clients retain the full native-tool interface. Use `--discovery full` for explicit fallback. The generic call is not read-only and must retain target-specific approval. HTTP and the native stdio bridge are covered by integration tests; that does not certify untested third-party clients. See [Progressive discovery](PROGRESSIVE-DISCOVERY.md).
+
+## Session lifetime and recovery
+
+The compatible `/mcp` and `/mcp/progressive` endpoints are stateful. Their default
+inactivity timeout remains 30 minutes; an open GET/SSE stream alone does not refresh
+that timer. MCP access tokens and Admin browser cookies are independent of protocol
+session IDs. Changing the Admin session timeout does not change MCP session expiry.
+
+The native stdio bridge and Manager's remote HTTP downstream connections send a
+protocol `ping` every five minutes by default. Three consecutive keepalive failures
+close a broken connection, while the downstream coordinator retains its existing
+backoff/reconnection ownership. Local stdio downstream workers do not get HTTP pings.
+
+After a Hub session is lost, the updated native bridge keeps its local stdio client
+connection open while a single coordinator creates a fresh Hub session, completes
+initialization and tool discovery, and atomically replaces the tool directory. It
+never carries a stale `Mcp-Session-Id` into the new initialization. Recovery is bounded
+to five attempts with exponential waits starting at 500 ms and capped at five
+seconds, with the existing startup deadline applying to each connection/discovery.
+Cancellation and local EOF stop outstanding recovery. Authentication failures,
+redirects, and certificate verification errors terminate clearly rather than loop.
+
+An interrupted `tools/call` is **not replayed**, even if its response was lost after
+the operation executed. That request fails; a later, new explicit call can use the
+replacement session. This rule also applies to tools marked read-only because the
+bridge cannot safely infer whether a remote operation already happened.
+
+This client recovery requires an updated `mcp-manager` executable on the machine
+running the stdio bridge. Updating the center alone does not upgrade downloaded
+client executables. Direct HTTP clients must implement their own protocol recovery:
+a `404 session not found` requires discarding the old session ID and running a fresh
+initialize handshake. Reconnecting TCP while retaining an expired ID is insufficient.
+Third-party clients are not claimed to be fixed by the native bridge update.
 
 ## Downstream behavior
 
